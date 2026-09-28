@@ -13,13 +13,20 @@ export async function POST(
     where: { id },
     include: {
       criteria: true,
-      submissions: { where: { status: "pending" } },
+      // Pick up pending submissions AND errored ones (so a re-run works)
+      submissions: { where: { status: { in: ["pending", "error"] } } },
     },
   });
 
   if (!session) {
     return new Response(JSON.stringify({ error: "Session not found" }), { status: 404 });
   }
+
+  // Reset errored submissions back to pending so they get retried
+  await prisma.submission.updateMany({
+    where: { sessionId: id, status: "error" },
+    data: { status: "pending", errorMessage: null },
+  });
 
   // Update session status to running
   await prisma.session.update({ where: { id }, data: { status: "running" } });

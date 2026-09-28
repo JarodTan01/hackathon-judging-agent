@@ -48,6 +48,7 @@ export default function SessionResultsPage({
   const [id, setId] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isRerunning, setIsRerunning] = useState(false);
 
   useEffect(() => {
     params.then((p) => setId(p.id));
@@ -101,7 +102,23 @@ export default function SessionResultsPage({
       false);
 
   const doneSubmissions = session?.submissions.filter((s) => s.status === "done") ?? [];
+  const errorSubmissions = session?.submissions.filter((s) => s.status === "error") ?? [];
   const canExport = doneSubmissions.length > 0;
+  const canRerun = !isRunning && errorSubmissions.length > 0 && id !== null;
+
+  async function handleRerun() {
+    if (!id) return;
+    setIsRerunning(true);
+    try {
+      fetch(`/api/sessions/${id}/run`, { method: "POST" }).catch(() => {});
+      // Brief delay so the DB has time to reset statuses before we poll
+      await new Promise((r) => setTimeout(r, 800));
+      const res = await fetch(`/api/sessions/${id}`);
+      if (res.ok) setSession(await res.json());
+    } finally {
+      setIsRerunning(false);
+    }
+  }
 
   const rankedSubmissions = session
     ? [...session.submissions].sort((a, b) => {
@@ -203,6 +220,20 @@ export default function SessionResultsPage({
                   </>
                 )}
               </span>
+
+              {/* Re-run errored submissions */}
+              {canRerun && (
+                <button
+                  disabled={isRerunning}
+                  onClick={handleRerun}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 text-xs font-semibold text-amber-400 hover:bg-amber-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  {isRerunning ? "Retrying…" : `Retry ${errorSubmissions.length} failed`}
+                </button>
+              )}
 
               {/* Export CSV */}
               <button

@@ -1,5 +1,56 @@
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 import type { RepoData } from "./github";
+
+/**
+ * Resolve the absolute path to the `bob` binary.
+ * child_process.spawn inherits a restricted PATH from the Next.js server
+ * process, which often excludes npm global bin dirs. We try:
+ *   1. The BOB_PATH env var (explicit override)
+ *   2. `which bob` run with a broader PATH that includes common npm bin dirs
+ *   3. Known fallback locations
+ */
+function resolveBobPath(): string {
+  // 1. Explicit override
+  if (process.env.BOB_PATH) return process.env.BOB_PATH;
+
+  // 2. Extend PATH with common npm global bin locations and try `which`
+  const extraPaths = [
+    process.env.npm_config_prefix ? `${process.env.npm_config_prefix}/bin` : "",
+    `${process.env.HOME}/.hermes/node/bin`,
+    `${process.env.HOME}/.npm-global/bin`,
+    `${process.env.HOME}/.local/bin`,
+    "/usr/local/bin",
+    "/opt/homebrew/bin",
+  ].filter(Boolean).join(":");
+
+  const searchPath = `${extraPaths}:${process.env.PATH ?? ""}`;
+
+  try {
+    const resolved = execSync("which bob", {
+      env: { ...process.env, PATH: searchPath },
+      encoding: "utf8",
+    }).trim();
+    if (resolved) return resolved;
+  } catch {
+    // which failed — fall through to known locations
+  }
+
+  // 3. Known fallback locations
+  const candidates = [
+    `${process.env.HOME}/.hermes/node/bin/bob`,
+    `${process.env.HOME}/.npm-global/bin/bob`,
+    `${process.env.HOME}/.local/bin/bob`,
+    "/usr/local/bin/bob",
+    "/opt/homebrew/bin/bob",
+  ];
+  const { existsSync } = require("fs");
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+
+  // Last resort — hope it's on PATH
+  return "bob";
+}
 
 export interface RatingCriterion {
   id: string;
@@ -83,16 +134,36 @@ function invokeBob(
   prompt: string
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
+    const bobPath = resolveBobPath();
+
     const timeout = setTimeout(() => {
       child.kill();
       reject(new Error("Bob Shell timed out after 90 seconds"));
     }, 90_000);
 
+    // Build an env that includes common npm bin dirs so bob can find its own deps
+    const extraPaths = [
+      `${process.env.HOME}/.hermes/node/bin`,
+      `${process.env.HOME}/.npm-global/bin`,
+      `${process.env.HOME}/.local/bin`,
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+    ].join(":");
+
+    // Use api-key auth if BOBSHELL_API_KEY is set, otherwise fall back to
+    // existing IBMid session (works if the user has already logged in interactively)
+    const authArgs = process.env.BOBSHELL_API_KEY
+      ? ["--auth-method", "api-key"]
+      : [];
+
     const child = spawn(
-      "bob",
-      ["-p", prompt, "--hide-intermediary-output", "--auth-method", "api-key"],
+      bobPath,
+      ["-p", prompt, "--hide-intermediary-output", ...authArgs],
       {
-        env: { ...process.env },
+        env: {
+          ...process.env,
+          PATH: `${extraPaths}:${process.env.PATH ?? ""}`,
+        },
         stdio: ["ignore", "pipe", "pipe"],
       }
     );
