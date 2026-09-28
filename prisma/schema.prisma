@@ -1,0 +1,57 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id          String       @id @default(cuid())
+  name        String
+  description String?
+  status      String       @default("draft") // draft | running | completed
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  criteria    Criterion[]
+  submissions Submission[]
+}
+
+model Criterion {
+  id          String           @id @default(cuid())
+  sessionId   String
+  session     Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  weight      Float            @default(1)
+  maxScore    Float            @default(10)
+  scores      CriterionScore[]
+}
+
+model Submission {
+  id           String           @id @default(cuid())
+  sessionId    String
+  session      Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  repoUrl      String
+  repoName     String?
+  overallScore Float?
+  status       String           @default("pending") // pending | scraping | rating | done | error
+  errorMessage String?
+  ratedAt      DateTime?
+  createdAt    DateTime         @default(now())
+  scores       CriterionScore[]
+}
+
+model CriterionScore {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  criterionId  String
+  criterion    Criterion  @relation(fields: [criterionId], references: [id], onDelete: Cascade)
+  score        Float
+  reasoning    String
+}

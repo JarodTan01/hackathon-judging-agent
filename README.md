@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Hackathon Screener
 
-## Getting Started
+AI-powered GitHub repository screening for hackathon organizers. Paste a list of GitHub repo URLs, define judging criteria, and let **Bob AI** rate every submission automatically — then view a ranked results dashboard and export to CSV.
 
-First, run the development server:
+## Demo flow
+
+1. **Create a session** — give it a name and define judging criteria (name, description, weight, max score)
+2. **Paste GitHub URLs** — one per line, or copy a column straight from Google Sheets
+3. **Start Screening** — Bob scrapes each repo (README, file tree, dependencies, stars, issues) and rates it against your criteria
+4. **View ranked results** — expandable per-criterion scores with Bob's reasoning, plus a progress bar while rating runs
+5. **Export CSV** — download results as a spreadsheet
+
+## Prerequisites
+
+- **Node.js 18+**
+- **Bob Shell** installed and on your `PATH` — [install instructions](https://bob.ibm.com)
+- A **Bob Shell API key** with **Inference scope** — create one at the Bob web portal
+- Accept the Bob Shell license once interactively:
+  ```bash
+  bob --accept-license -p "hello"
+  ```
+
+## Setup
 
 ```bash
+# 1. Install dependencies
+npm install
+
+# 2. Copy env file and fill in your key
+cp .env.example .env.local
+# Edit .env.local:
+#   BOBSHELL_API_KEY=your-bob-api-key-here
+#   GITHUB_TOKEN=optional-github-token  (raises rate limits from 60 → 5000 req/hr)
+
+# 3. Set up the database
+npx prisma@5 migrate dev --name init
+
+# 4. Start the dev server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment variables
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Variable | Required | Description |
+|---|---|---|
+| `BOBSHELL_API_KEY` | ✅ Yes | Bob Shell API key (Inference scope) |
+| `GITHUB_TOKEN` | No | GitHub PAT to raise API rate limits |
+| `DATABASE_URL` | Auto | Set by Prisma — `file:./dev.db` |
 
-## Learn More
+## Architecture
 
-To learn more about Next.js, take a look at the following resources:
+```
+Browser (Next.js React)
+    │
+    │  REST + polling
+    ▼
+Next.js API Routes (Node.js)
+    │           │
+    │           ▼
+    │     Prisma ORM ──► SQLite (prisma/dev.db)
+    │
+    ├── src/lib/github.ts ──► GitHub REST API
+    │
+    └── src/lib/bob-rater.ts ──► child_process.spawn("bob -p ...")
+                                        │
+                                        ▼
+                                 Bob Shell CLI
+                                 (BOBSHELL_API_KEY auth)
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Tech stack
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Next.js 15** (App Router, TypeScript)
+- **Tailwind CSS** (dark theme)
+- **Prisma 5 + SQLite** (zero-infra persistence)
+- **Bob Shell** (AI rating via non-interactive CLI)
+- **GitHub REST API** (repo scraping)
 
-## Deploy on Vercel
+## How Bob rates repos
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Each repo is scraped for: README, top-level file tree, `package.json` / `requirements.txt` dependencies, star count, and open issue count. This data is assembled into a structured prompt that instructs Bob to return a JSON object with per-criterion scores (0–maxScore) and reasoning. The overall score is a weighted average across all criteria.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Bob is invoked as:
+```bash
+bob -p "<prompt>" --hide-intermediary-output --auth-method api-key
+```
