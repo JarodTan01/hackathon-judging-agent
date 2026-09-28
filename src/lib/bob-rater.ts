@@ -254,13 +254,19 @@ function parseRatingOutput(
     overallScore?: unknown;
   };
 
-  // 4. Clamp scores to [0, criterion.maxScore]
+  // 4. Match Bob's scores back to real criterion IDs.
+  // Bob may hallucinate IDs, so we match by exact ID first, then fall back
+  // to positional matching (nth score → nth criterion).
   const criterionMap = new Map(criteria.map((c) => [c.id, c]));
-  const scores: CriterionRating[] = raw.scores.map((s) => {
-    const criterion = criterionMap.get(s.criterionId);
+  const scores: CriterionRating[] = raw.scores.map((s, idx) => {
+    // Try exact ID match first
+    let criterion = criterionMap.get(s.criterionId);
+    // Fall back to positional match
+    if (!criterion) criterion = criteria[idx];
+    const realId = criterion?.id ?? s.criterionId;
     const maxScore = criterion?.maxScore ?? 10;
     return {
-      criterionId: s.criterionId,
+      criterionId: realId,
       score: Math.min(Math.max(Number(s.score) || 0, 0), maxScore),
       reasoning: s.reasoning ?? "",
     };
