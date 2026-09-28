@@ -130,18 +130,22 @@ Respond with ONLY a valid JSON object in this exact format (no markdown fences, 
 }`;
 }
 
-function invokeBob(
-  prompt: string
-): Promise<{ stdout: string; stderr: string }> {
+/**
+ * Invoke Bob Shell v2 in headless mode.
+ * v2 CLI: `bob run --format json <prompt>`
+ * Auth:   BOB_API_KEY environment variable
+ * Output: JSON with shape { status, last_message, ... }
+ */
+function invokeBob(prompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const bobPath = resolveBobPath();
 
     const timeout = setTimeout(() => {
       child.kill();
-      reject(new Error("Bob Shell timed out after 90 seconds"));
-    }, 90_000);
+      reject(new Error("Bob Shell timed out after 120 seconds"));
+    }, 120_000);
 
-    // Build an env that includes common npm bin dirs so bob can find its own deps
+    // Extend PATH so bob can find its own node runtime
     const extraPaths = [
       `${process.env.HOME}/.hermes/node/bin`,
       `${process.env.HOME}/.npm-global/bin`,
@@ -150,19 +154,23 @@ function invokeBob(
       "/opt/homebrew/bin",
     ].join(":");
 
-    // Use api-key auth if BOBSHELL_API_KEY is set, otherwise fall back to
-    // existing IBMid session (works if the user has already logged in interactively)
-    const authArgs = process.env.BOBSHELL_API_KEY
-      ? ["--auth-method", "api-key"]
-      : [];
-
     const child = spawn(
       bobPath,
-      ["-p", prompt, "--hide-intermediary-output", ...authArgs],
+      [
+        "run",
+        "--format", "json",
+        "--max-turns", "3",
+        "--log-level", "silent",
+        "--disable-mcp",
+        "--disable-subagents",
+        prompt,
+      ],
       {
         env: {
           ...process.env,
           PATH: `${extraPaths}:${process.env.PATH ?? ""}`,
+          // v2 uses BOB_API_KEY
+          BOB_API_KEY: process.env.BOB_API_KEY ?? "",
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
@@ -171,23 +179,26 @@ function invokeBob(
     let stdout = "";
     let stderr = "";
 
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
 
     child.on("close", (code) => {
       clearTimeout(timeout);
       if (code !== 0) {
-        reject(
-          new Error(
-            `Bob Shell exited with code ${code}. stderr: ${stderr.slice(0, 500)}`
-          )
-        );
-      } else {
-        resolve({ stdout, stderr });
+        reject(new Error(`Bob Shell exited with code ${code}. stderr: ${stderr.slice(0, 500)}`));
+        return;
+      }
+      // Parse v2 JSON output: { status, last_message, ... }
+      try {
+        const parsed = JSON.parse(stdout.trim());
+        if (parsed.status !== "success") {
+          reject(new Error(`Bob returned status "${parsed.status}": ${parsed.last_message ?? stderr}`));
+          return;
+        }
+        resolve(parsed.last_message as string);
+      } catch {
+        // Fallback: return raw stdout if JSON parse fails
+        resolve(stdout.trim());
       }
     });
 
@@ -287,8 +298,8 @@ export async function rateRepo(
 ): Promise<RateResult> {
   try {
     const prompt = buildPrompt(repoData, criteria);
-    const { stdout } = await invokeBob(prompt);
-    const result = parseRatingOutput(stdout, criteria);
+    const output = await invokeBob(prompt);
+    const result = parseRatingOutput(output, criteria);
     return result;
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
